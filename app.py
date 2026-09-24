@@ -3,6 +3,7 @@ import time
 import httpx
 import json
 import sys
+import random
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from Crypto.Cipher import AES
@@ -11,13 +12,12 @@ import base64
 from datetime import datetime, timedelta
 from google.protobuf import json_format
 
-# ============= =============
 try:
     import FreeFire_pb2, main_pb2, AccountPersonalShow_pb2
     import GetOutfit_pb2
-    print("✅ Proto files imported successfully")
+    print("[OK] Proto files imported successfully")
 except ImportError as e:
-    print(f"❌ Proto import error: {e}")
+    print(f"[ERR] Proto import error: {e}")
     sys.exit(1)
 
 # =============================================
@@ -30,14 +30,10 @@ USERAGENT = "Dalvik/2.1.0 (Linux; U; Android 14; CPH2095 Build/RKQ1.211119.001)"
 MAIN_KEY = b'Yg&tc%DEuh6%Zc^8'
 MAIN_IV = b'6oyZDr22E3ychjM%'
 
-# =============================================
-# JWT TOKEN API
-# =============================================
-
-JWT_API_BASE = "https://jwt-token-gen-kazu.vercel.app/token"   #JWT API BY NXC OFFICAL
+JWT_API_BASE = "https://jwt-wxun.vercel.app/token"
 
 # =============================================
-# ACCOUNTS FOR JWT
+# ACCOUNTS FOR JWT (list of dicts — bug fix)
 # =============================================
 
 BD_CREDS = [
@@ -84,7 +80,7 @@ ACCOUNT_CREDENTIALS = {
 }
 
 # =============================================
-# 🌍
+# REGION CONFIG
 # =============================================
 
 REGION_CONFIG = {
@@ -99,30 +95,31 @@ LOGIN_URLS = {
     "BR": "https://loginbp.ppmainecoonghj.com"
 }
 
-
 REGION_PRIORITY = ["BD", "IND", "BR"]
 
 # === Flask App ===
 app = Flask(__name__)
 CORS(app)
 
-# =============================================
-# In-Memory Token Cache (per container)
-# =============================================
-
 _token_cache = {}
 
 # =============================================
-# JWT Token Function
+# JWT Token via external API (with rotation)
 # =============================================
 
+def pick_random_cred(region):
+    creds = ACCOUNT_CREDENTIALS.get(region) or []
+    if not creds:
+        return None
+    return random.choice(creds)
+
 async def get_jwt_token_from_api(region: str):
-    cred = ACCOUNT_CREDENTIALS.get(region)
+    cred = pick_random_cred(region)
     if not cred:
         return None
 
     url = f"{JWT_API_BASE}?uid={cred['uid']}&password={cred['password']}"
-    
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json"
@@ -131,15 +128,15 @@ async def get_jwt_token_from_api(region: str):
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(url, headers=headers)
-            
+
             if response.status_code != 200:
-                print(f"⚠️ [{region}] JWT API returned {response.status_code}: {response.text[:120]}")
+                print(f"[WARN] [{region}] JWT API returned {response.status_code}: {response.text[:120]}")
                 return None
 
             data = response.json()
             token = data.get("token")
             if not token:
-                print(f"⚠️ [{region}] JWT API returned no token: {data}")
+                print(f"[WARN] [{region}] JWT API returned no token: {data}")
                 return None
 
             api_region = data.get("region", region)
@@ -152,7 +149,7 @@ async def get_jwt_token_from_api(region: str):
                 "expires_at": time.time() + 25200
             }
     except Exception as e:
-        print(f"❌ JWT API exception for {region}: {e}")
+        print(f"[ERR] JWT API exception for {region}: {e}")
         return None
 
 # =============================================
@@ -173,12 +170,14 @@ async def get_token(region: str):
         _token_cache[region] = token_info
         return token_info
 
-    print(f"❌ [{region}] Unable to acquire bot token. Account may be banned or API unreachable.")
+    print(f"[ERR] [{region}] Unable to acquire bot token. Account may be banned or API unreachable.")
     return None
 
 async def generate_token_backup(region: str):
     try:
-        cred = ACCOUNT_CREDENTIALS.get(region, ACCOUNT_CREDENTIALS["BD"])
+        cred = pick_random_cred(region)
+        if not cred:
+            return None
         account = f"uid={cred['uid']}&password={cred['password']}"
 
         token_val, open_id = await get_access_token(account)
@@ -211,14 +210,14 @@ async def generate_token_backup(region: str):
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(url, data=payload, headers=headers)
             if resp.status_code != 200:
-                print(f"❌ Backup MajorLogin failed for {region}: {resp.status_code}")
+                print(f"[ERR] Backup MajorLogin failed for {region}: {resp.status_code}")
                 return None
 
             if b"Exploiting loopholes" in resp.content:
-                print(f"🚨 [{region}] Bot account (UID: {cred['uid']}) is BANNED by Garena (Reason: Exploiting loopholes)!")
+                print(f"[BAN] [{region}] Bot account (UID: {cred['uid']}) banned — Exploiting loopholes")
                 return None
             if b"Modifiers" in resp.content:
-                print(f"🚨 [{region}] Bot account (UID: {cred['uid']}) is BANNED by Garena (Reason: Modifiers)!")
+                print(f"[BAN] [{region}] Bot account (UID: {cred['uid']}) banned — Modifiers")
                 return None
 
             try:
@@ -227,10 +226,10 @@ async def generate_token_backup(region: str):
                 msg_json = json_format.MessageToJson(login_res)
                 msg = json.loads(msg_json)
                 if not msg.get("token"):
-                    print(f"⚠️ [{region}] MajorLogin returned no token for UID {cred['uid']}")
+                    print(f"[WARN] [{region}] MajorLogin returned no token for UID {cred['uid']}")
                     return None
             except Exception as parse_err:
-                print(f"⚠️ [{region}] MajorLogin parse error: {parse_err}")
+                print(f"[WARN] [{region}] MajorLogin parse error: {parse_err}")
                 return None
 
             return {
@@ -240,7 +239,7 @@ async def generate_token_backup(region: str):
                 'expires_at': time.time() + 25200
             }
     except Exception as e:
-        print(f"❌ Backup token error for {region}: {e}")
+        print(f"[ERR] Backup token error for {region}: {e}")
         return None
 
 # === Helper Functions ===
@@ -302,7 +301,7 @@ async def GetAccountInformation(uid, region):
             resp = await client.post(server_url + '/GetPlayerPersonalShow', data=data_enc, headers=headers)
 
             if resp.status_code != 200:
-                print(f"⚠️ [{actual_region}] GetPlayerPersonalShow returned {resp.status_code} for UID {uid}")
+                print(f"[WARN] [{actual_region}] GetPlayerPersonalShow returned {resp.status_code} for UID {uid}")
                 if resp.status_code in (401, 429):
                     _token_cache.pop(region, None)
                 err_type = "RATE_LIMITED" if resp.status_code == 429 else "NOT_FOUND"
@@ -314,27 +313,26 @@ async def GetAccountInformation(uid, region):
 
             is_banned = result.get("isBanned", False)
             if isinstance(is_banned, bool):
-                result["ban_status"] = "🔴 BANNED" if is_banned else "🟢 UNBANNED"
+                result["ban_status"] = "BANNED" if is_banned else "UNBANNED"
             else:
-                result["ban_status"] = "❓ UNKNOWN"
+                result["ban_status"] = "UNKNOWN"
 
             result["region"] = actual_region
             return {"success": True, "data": result}
 
     except Exception as e:
-        print(f"❌ Error in GetAccountInformation for {region}: {e}")
+        print(f"[ERR] Error in GetAccountInformation for {region}: {e}")
         return {"success": False, "error_type": "EXCEPTION", "region": region, "error": str(e)}
 
 # =============================================
-# HELPER
+# HELPERS
 # =============================================
 
 def get_item_name(item_id):
     if not item_id or item_id == "0" or item_id == 0:
         return "N/A"
     try:
-        import requests
-        response = requests.get(f"https://api.danger.workers.dev/item/{item_id}", timeout=3)
+        response = httpx.get(f"https://api.danger.workers.dev/item/{item_id}", timeout=3)
         if response.status_code == 200:
             data = response.json()
             return data.get("name", str(item_id))
@@ -396,11 +394,10 @@ def get_full_info():
         regions_to_try.insert(0, requested_region)
 
     async def try_all_regions_parallel():
-        """BD, IND, BR — Parallel with priority fallback."""
         tasks = []
         for region in regions_to_try:
             tasks.append(asyncio.create_task(GetAccountInformation(uid_int, region)))
-        
+
         errors = []
         try:
             for coro in asyncio.as_completed(tasks, timeout=20):
@@ -417,7 +414,7 @@ def get_full_info():
                     errors.append({"error_type": "EXCEPTION", "error": str(ex)})
         except asyncio.TimeoutError:
             pass
-        
+
         for t in tasks:
             if not t.done():
                 t.cancel()
@@ -426,7 +423,7 @@ def get_full_info():
     try:
         account_data, errors = asyncio.run(try_all_regions_parallel())
     except Exception as e:
-        print(f"❌ Global error: {e}")
+        print(f"[ERR] Global error: {e}")
         account_data, errors = None, [{"error_type": "GLOBAL", "error": str(e)}]
 
     if not account_data:
@@ -434,13 +431,13 @@ def get_full_info():
             return jsonify({
                 "status": "error",
                 "error": "Bot accounts unavailable or banned",
-                "message": "All bot accounts failed to authenticate with Garena. Please check server console or update guest credentials in app.py."
+                "message": "All bot accounts failed to authenticate with Garena."
             }), 503
         if errors and all(e.get("error_type") == "RATE_LIMITED" for e in errors):
             return jsonify({
                 "status": "error",
                 "error": "Rate limited by Garena",
-                "message": "All bot accounts are currently rate limited by Garena (429). Please wait for cooldown or add more accounts."
+                "message": "All bot accounts are currently rate limited by Garena (429). Please wait for cooldown."
             }), 429
         return jsonify({"error": "Player not found"}), 404
 
@@ -468,7 +465,7 @@ def get_full_info():
         "credit": "@kuchupuchu04",
         "status": "success",
         "server_used": used_region,
-        "BanStatus": account_data.get("ban_status", "❓ UNKNOWN"),
+        "BanStatus": account_data.get("ban_status", "UNKNOWN"),
         "BasicInformation": {
             "PrimeLevel": prime_level,
             "Name": basic.get("nickname", "N/A"),
@@ -534,8 +531,8 @@ def home():
         "version": "OB55",
         "endpoint": "/info?uid=UID",
         "example": "/info?uid=13921432690",
-        "priority": "BD → IND → BR",
-        "credit": "TG-- @kuchupuchu04 || DC-- @nxc_official"
+        "priority": "BD -> IND -> BR",
+        "credit": "TG @kuchupuchu04 || DC @nxc_official"
     })
 
 @app.route('/status')
@@ -545,10 +542,6 @@ def token_status():
         expires_in = info['expires_at'] - time.time()
         status[region] = {"has_token": True, "expires_in": f"{expires_in/3600:.1f} hours"}
     return jsonify({"total_tokens": len(_token_cache), "tokens": status})
-
-# =============================================
-# Local dev entry point
-# =============================================
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5004, debug=False)
