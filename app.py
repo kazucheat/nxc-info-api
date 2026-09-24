@@ -307,21 +307,21 @@ async def GetAccountInformation(uid, region):
                 err_type = "RATE_LIMITED" if resp.status_code == 429 else "NOT_FOUND"
                 return {"success": False, "error_type": err_type, "region": actual_region, "status_code": resp.status_code}
 
-            account_info = AccountPersonalShow_pb2.AccountPersonalShowInfo()
+             account_info = AccountPersonalShow_pb2.AccountPersonalShowInfo()
             account_info.ParseFromString(resp.content)
             result = json.loads(json_format.MessageToJson(account_info))
 
             is_banned = result.get("isBanned", False)
             if isinstance(is_banned, bool):
-                result["ban_status"] = "BANNED" if is_banned else "UNBANNED"
+                result["ban_status"] = "🔴 BANNED" if is_banned else "🟢 UNBANNED"
             else:
-                result["ban_status"] = "UNKNOWN"
+                result["ban_status"] = "❓ UNKNOWN"
 
             result["region"] = actual_region
             return {"success": True, "data": result}
 
     except Exception as e:
-        print(f"[ERR] Error in GetAccountInformation for {region}: {e}")
+        print(f"❌ Error in GetAccountInformation for {region}: {e}")
         return {"success": False, "error_type": "EXCEPTION", "region": region, "error": str(e)}
 
 # =============================================
