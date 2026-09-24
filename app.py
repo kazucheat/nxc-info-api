@@ -307,7 +307,7 @@ async def GetAccountInformation(uid, region):
                 err_type = "RATE_LIMITED" if resp.status_code == 429 else "NOT_FOUND"
                 return {"success": False, "error_type": err_type, "region": actual_region, "status_code": resp.status_code}
 
-             account_info = AccountPersonalShow_pb2.AccountPersonalShowInfo()
+            account_info = AccountPersonalShow_pb2.AccountPersonalShowInfo()
             account_info.ParseFromString(resp.content)
             result = json.loads(json_format.MessageToJson(account_info))
 
